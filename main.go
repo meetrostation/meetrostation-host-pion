@@ -209,7 +209,7 @@ func newPeerConnection(peers *[]Peer) int {
 						fmt.Fprintf(os.Stderr,
 							"peer ?: state - %s\n",
 							connectionState.String())
-						panic("logic: unidentified peer connection")
+						return
 					}
 					if (*peers)[peerIndex].peerConnection == peerConnection {
 						break
@@ -537,10 +537,10 @@ func main() {
 			break
 		}
 
-		fmt.Fprintf(os.Stderr, "peer %d: waiting for ice stuff\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "peer %d: waiting for all ice candidates\n", peerIndex)
 		<-peers[peerIndex].gatherComplete
 
-		fmt.Fprintf(os.Stderr, "peer %d: ice stuff is ready\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "peer %d: all ice candidates are received from stun server\n", peerIndex)
 
 		signalHostSetup(signalServer,
 			hostId,
