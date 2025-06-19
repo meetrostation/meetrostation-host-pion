@@ -34,7 +34,7 @@ func (peer *Peer) Close(index int) {
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: peerConnection.Close - %s\n",
+				"conn %d: peerConnection.Close - %s\n",
 				index,
 				err)
 		}
@@ -54,7 +54,7 @@ func (peer *Peer) Close(index int) {
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: remoteAudioConnection.Close - %s\n",
+				"conn %d: remoteAudioConnection.Close - %s\n",
 				index,
 				err)
 		}
@@ -66,7 +66,7 @@ func (peer *Peer) Close(index int) {
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: remoteVideoConnection.Close - %s\n",
+				"conn %d: remoteVideoConnection.Close - %s\n",
 				index,
 				err)
 		}
@@ -80,7 +80,7 @@ func (peer *Peer) CloseRemoteConnections(index int) {
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: remoteAudioConnection.Close - %s\n",
+				"conn %d: remoteAudioConnection.Close - %s\n",
 				index,
 				err)
 		}
@@ -92,7 +92,7 @@ func (peer *Peer) CloseRemoteConnections(index int) {
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: remoteVideoConnection.Close - %s\n",
+				"conn %d: remoteVideoConnection.Close - %s\n",
 				index,
 				err)
 		}
@@ -188,7 +188,7 @@ func newPeerConnection(peers *[]Peer) int {
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"error setting up peer connection. will retry: %s\n",
+				"while setting up peer connection. will retry: %s\n",
 				err)
 			continue
 		}
@@ -207,7 +207,7 @@ func newPeerConnection(peers *[]Peer) int {
 				for {
 					if peerIndex == len(*peers) {
 						fmt.Fprintf(os.Stderr,
-							"peer ?: state - %s\n",
+							"conn ?: state - %s\n",
 							connectionState.String())
 						return
 					}
@@ -218,7 +218,7 @@ func newPeerConnection(peers *[]Peer) int {
 				}
 
 				fmt.Fprintf(os.Stderr,
-					"peer %d: state - %s\n",
+					"conn %d: state - %s\n",
 					peerIndex,
 					connectionState.String())
 
@@ -259,7 +259,7 @@ func setupTrackHandler(peers *[]Peer, peerIndex int) {
 	(*peers)[peerIndex].remoteAudioConnection, err = net.DialUDP("udp", localAddress, remoteAddressAudio)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"peer %d: audio - net.DialUDP - %s\n",
+			"conn %d: audio - net.DialUDP - %s\n",
 			peerIndex,
 			err)
 	}
@@ -273,7 +273,7 @@ func setupTrackHandler(peers *[]Peer, peerIndex int) {
 	(*peers)[peerIndex].remoteVideoConnection, err = net.DialUDP("udp", localAddress, remoteAddressVideo)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"peer %d: video - net.DialUDP - %s\n",
+			"conn %d: video - net.DialUDP - %s\n",
 			peerIndex,
 			err)
 	}
@@ -297,7 +297,7 @@ func setupTrackHandler(peers *[]Peer, peerIndex int) {
 			n, _, err := track.Read(buf)
 			if err != nil {
 				fmt.Fprintf(os.Stderr,
-					"peer %d: track read - %s\n",
+					"conn %d: track read - %s\n",
 					peerIndex,
 					err)
 				break
@@ -306,7 +306,7 @@ func setupTrackHandler(peers *[]Peer, peerIndex int) {
 			err = rtpPacket.Unmarshal(buf[:n])
 			if err != nil {
 				fmt.Fprintf(os.Stderr,
-					"peer %d: rtp packet unmarshal - %s\n",
+					"conn %d: rtp packet unmarshal - %s\n",
 					peerIndex,
 					err)
 			}
@@ -315,7 +315,7 @@ func setupTrackHandler(peers *[]Peer, peerIndex int) {
 			n, err = rtpPacket.MarshalTo(buf)
 			if err != nil {
 				fmt.Fprintf(os.Stderr,
-					"peer %d: rtp packet marshal - %s\n",
+					"conn %d: rtp packet marshal - %s\n",
 					peerIndex,
 					err)
 			}
@@ -329,7 +329,7 @@ func setupTrackHandler(peers *[]Peer, peerIndex int) {
 				}
 
 				fmt.Fprintf(os.Stderr,
-					"peer %d: rtp packet write - %s\n",
+					"conn %d: rtp packet write - %s\n",
 					peerIndex,
 					err)
 
@@ -344,13 +344,12 @@ func signalHostSetup(signalServer string,
 	peers []Peer,
 	peerIndex int) {
 
-	client := http.Client{}
+	client := &http.Client{}
 
 	for {
-		hostSignal, err := client.Post(
+		request, err := http.NewRequest(http.MethodPost,
 			fmt.Sprintf("%s/api/host",
 				signalServer),
-			"application/json; charset=UTF-8",
 			bytes.NewBufferString(
 				fmt.Sprintf("{\"id\": \"%s\", \"description\": \"%s\"}",
 					hostId,
@@ -358,31 +357,41 @@ func signalHostSetup(signalServer string,
 						peers[peerIndex].peerConnection.LocalDescription(),
 					),
 				),
-			),
-		)
-
+			))
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: problem with setting up hostId with signalling server: %s\n",
+				"conn %d: while setting up hostId with signalling server: %s\n",
 				peerIndex,
 				err)
 			continue
 		}
-		defer hostSignal.Body.Close()
 
-		if hostSignal.StatusCode == http.StatusOK {
+		request.Header.Add("Content-type", "application/json; charset=UTF-8")
+
+		hostSignal, err := client.Do(request)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"conn %d: while setting up hostId with signalling server: %s\n",
+				peerIndex,
+				err)
+			continue
+		}
+		allOK := hostSignal.StatusCode == http.StatusOK
+		hostSignal.Body.Close()
+
+		if allOK {
 			// var hostSignalBody map[string]interface{}
 
 			// json.NewDecoder(hostSignal.Body).Decode(hostSignalBody)
+			break
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: problem with setting up hostId with signalling server: %s\n",
+				"conn %d: while setting up hostId with signalling server: %s\n",
 				peerIndex,
 				"response status")
 			continue
 		}
-
-		break
 	}
 }
 
@@ -390,7 +399,7 @@ func signalWaitForGuest(signalServer string,
 	hostId string,
 	peerIndex int) webrtc.SessionDescription {
 
-	client := http.Client{}
+	client := &http.Client{}
 
 	for {
 		time.Sleep(1 * time.Second)
@@ -398,26 +407,38 @@ func signalWaitForGuest(signalServer string,
 		params := url.Values{}
 		params.Add("hostId", hostId)
 
-		guestSignal, err := client.Get(
+		request, err := http.NewRequest(http.MethodGet,
 			fmt.Sprintf(
 				"%s/api/guest?%s",
 				signalServer,
 				params.Encode(),
 			),
-		)
+			nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: problem with getting guest information with signalling server: %s\n",
+				"conn %d: while getting guest information with signalling server: %s\n",
 				peerIndex,
 				err)
 			continue
 		}
-		defer guestSignal.Body.Close()
 
-		if guestSignal.StatusCode == http.StatusOK {
-			var guestDescriptionObject map[string]string
+		guestSignal, err := client.Do(request)
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"conn %d: while getting guest information with signalling server: %s\n",
+				peerIndex,
+				err)
+			continue
+		}
+
+		var guestDescriptionObject map[string]string
+		allOK := guestSignal.StatusCode == http.StatusOK
+		if allOK {
 			json.NewDecoder(guestSignal.Body).Decode(&guestDescriptionObject)
+		}
+		guestSignal.Body.Close()
 
+		if allOK {
 			guestDescription := guestDescriptionObject["guestDescription"]
 			if guestDescription != "" {
 				guestOffer := webrtc.SessionDescription{}
@@ -427,7 +448,7 @@ func signalWaitForGuest(signalServer string,
 			}
 		} else {
 			fmt.Fprintf(os.Stderr,
-				"peer %d: problem with getting guest information with signalling server: %s\n",
+				"conn %d: while getting guest information with signalling server: %s\n",
 				peerIndex,
 				"response status")
 			continue
@@ -482,7 +503,7 @@ func streamLocalTrack(peers *[]Peer) {
 				}
 
 				fmt.Fprintf(os.Stderr,
-					"peer %d: error during write to track: %s\n",
+					"conn %d: while write to track: %s\n",
 					peerIndex,
 					err)
 			}
@@ -517,7 +538,7 @@ func main() {
 			offerSessionDescription, err = peers[peerIndex].peerConnection.CreateOffer(nil)
 
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error creating offer: %s\n", err)
+				fmt.Fprintf(os.Stderr, "while creating offer: %s\n", err)
 				continue
 			}
 			break
@@ -530,24 +551,24 @@ func main() {
 			err = peers[peerIndex].peerConnection.SetLocalDescription(offerSessionDescription)
 			if err != nil {
 				fmt.Fprintf(os.Stderr,
-					"problem setting local description: %s\n",
+					"while setting local description: %s\n",
 					err)
 				continue
 			}
 			break
 		}
 
-		fmt.Fprintf(os.Stderr, "peer %d: waiting for all ice candidates\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "conn %d: waiting for all ice candidates\n", peerIndex)
 		<-peers[peerIndex].gatherComplete
 
-		fmt.Fprintf(os.Stderr, "peer %d: all ice candidates are received from stun server\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "conn %d: all ice candidates are received from stun server\n", peerIndex)
 
 		signalHostSetup(signalServer,
 			hostId,
 			peers,
 			peerIndex)
 
-		fmt.Fprintf(os.Stderr, "peer %d: waiting for the peer to join\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "conn %d: waiting for the peer to join\n", peerIndex)
 
 		guestOffer := signalWaitForGuest(signalServer,
 			hostId,
@@ -557,7 +578,7 @@ func main() {
 
 		peers[peerIndex].peerConnection.SetRemoteDescription(guestOffer)
 
-		fmt.Fprintf(os.Stderr, "peer %d: waiting for the peer connection\n", peerIndex)
+		fmt.Fprintf(os.Stderr, "conn %d: joined: waiting for the ice connection\n", peerIndex)
 		time.Sleep(1 * time.Second)
 	}
 }
