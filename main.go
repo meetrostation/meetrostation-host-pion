@@ -206,6 +206,9 @@ func newPeerConnection(peers *[]Peer) int {
 				peerIndex := 0
 				for {
 					if peerIndex == len(*peers) {
+						fmt.Fprintf(os.Stderr,
+							"peer ?: state - %s\n",
+							connectionState.String())
 						panic("logic: unidentified peer connection")
 					}
 					if (*peers)[peerIndex].peerConnection == peerConnection {
@@ -385,11 +388,10 @@ func signalHostSetup(signalServer string,
 
 func signalWaitForGuest(signalServer string,
 	hostId string,
-	// peers []Peer,
 	peerIndex int) webrtc.SessionDescription {
-	
+
 	client := http.Client{}
-	
+
 	for {
 		time.Sleep(1 * time.Second)
 
@@ -549,7 +551,6 @@ func main() {
 
 		guestOffer := signalWaitForGuest(signalServer,
 			hostId,
-			/*peers, */
 			peerIndex)
 
 		setupTrackHandler(&peers, peerIndex)
