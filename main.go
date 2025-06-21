@@ -456,8 +456,13 @@ func signalWaitForGuest(signalServer string,
 	}
 }
 
-func streamLocalTrack(peers *[]Peer) {
-	listener, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4000})
+func streamLocalTrack(peers *[]Peer, video bool, port int) {
+	listener, err := net.ListenUDP(
+		"udp",
+		&net.UDPAddr{
+			IP:   net.ParseIP("127.0.0.1"),
+			Port: port})
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"net.ListenUDP, %s\n",
@@ -493,10 +498,18 @@ func streamLocalTrack(peers *[]Peer) {
 
 		// fmt.Println(readBytes)
 		for peerIndex, peer := range *peers {
-			if peer.localVideoTrack == nil {
+			track := func() *webrtc.TrackLocalStaticRTP {
+				if video {
+					return peer.localVideoTrack
+				} else {
+					return peer.localAudioTrack
+				}
+			}()
+
+			if track == nil {
 				continue
 			}
-			_, err = peer.localVideoTrack.Write(inboundRTPPacket[:readBytes])
+			_, err = track.Write(inboundRTPPacket[:readBytes])
 			if err != nil {
 				if errors.Is(err, io.ErrClosedPipe) {
 					peer.Close(peerIndex)
@@ -526,7 +539,8 @@ func main() {
 	var peers []Peer
 	var peerIndex int
 
-	go streamLocalTrack(&peers)
+	go streamLocalTrack(&peers, false, 3998)
+	go streamLocalTrack(&peers, true, 4000)
 
 	for {
 		peerIndex = newPeerConnection(&peers)
