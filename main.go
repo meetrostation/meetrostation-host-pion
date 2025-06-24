@@ -126,7 +126,7 @@ func startPeerConnection() (
 
 	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
 		webrtc.RTPCodecCapability{
-			MimeType: webrtc.MimeTypeVP8,
+			MimeType: webrtc.MimeTypeH264,
 		},
 		"video",
 		"pion")
