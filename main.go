@@ -22,6 +22,7 @@ type Peer struct {
 	peerConnection        *webrtc.PeerConnection
 	localVideoTrack       *webrtc.TrackLocalStaticRTP
 	localAudioTrack       *webrtc.TrackLocalStaticRTP
+	dataChannel           *webrtc.DataChannel
 	remoteVideoConnection *net.UDPConn
 	remoteAudioConnection *net.UDPConn
 	gatherComplete        <-chan struct{}
@@ -46,6 +47,21 @@ func (peer *Peer) Close(index int) {
 
 	if peer.localAudioTrack != nil {
 		peer.localAudioTrack = nil
+	}
+
+	if peer.dataChannel != nil {
+		peer.dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
+		})
+
+		err := peer.dataChannel.Close()
+		peer.dataChannel = nil
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"conn %d: dataChannel.Close - %s\n",
+				index,
+				err)
+		}
 	}
 
 	if peer.remoteAudioConnection != nil {
@@ -74,6 +90,21 @@ func (peer *Peer) Close(index int) {
 }
 
 func (peer *Peer) CloseRemoteConnections(index int) {
+	if peer.dataChannel != nil {
+		peer.dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
+		})
+
+		err := peer.dataChannel.Close()
+		peer.dataChannel = nil
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"conn %d: dataChannel.Close - %s\n",
+				index,
+				err)
+		}
+	}
+
 	if peer.remoteAudioConnection != nil {
 		err := peer.remoteAudioConnection.Close()
 		peer.remoteAudioConnection = nil
@@ -103,6 +134,7 @@ func (peer *Peer) IsNull() bool {
 	return (peer.peerConnection == nil ||
 		peer.remoteAudioConnection == nil ||
 		peer.remoteVideoConnection == nil ||
+		peer.dataChannel == nil ||
 		peer.localAudioTrack == nil ||
 		peer.localVideoTrack == nil)
 }
@@ -111,6 +143,7 @@ func startPeerConnection() (
 	*webrtc.PeerConnection,
 	*webrtc.TrackLocalStaticRTP,
 	*webrtc.TrackLocalStaticRTP,
+	*webrtc.DataChannel,
 	error) {
 
 	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
@@ -121,7 +154,7 @@ func startPeerConnection() (
 		},
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
@@ -133,13 +166,13 @@ func startPeerConnection() (
 
 	if err != nil {
 		peerConnection.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	rtpSender, err := peerConnection.AddTrack(videoTrack)
 	if err != nil {
 		peerConnection.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	_ = rtpSender
 
@@ -152,13 +185,13 @@ func startPeerConnection() (
 
 	if err != nil {
 		peerConnection.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	rtpSender, err = peerConnection.AddTrack(audioTrack)
 	if err != nil {
 		peerConnection.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	_ = rtpSender
 
@@ -173,9 +206,35 @@ func startPeerConnection() (
 	// 		}
 	// 	}
 	// }()
+
+	dataChannelOrdered := true
+	dataChannelNegotiated := true
+	var dataChannelID uint16 = 0
+	dataChannelInit := webrtc.DataChannelInit{
+		Ordered:    &dataChannelOrdered,
+		Negotiated: &dataChannelNegotiated,
+		ID:         &dataChannelID,
+	}
+	dataChannel, err := peerConnection.CreateDataChannel(
+		"meetrostation", &dataChannelInit)
+	if err != nil {
+		peerConnection.Close()
+		return nil, nil, nil, nil, err
+	}
+
+	// dataChannel.OnOpen(func() {
+	// 	fmt.Fprintf(os.Stderr,
+	// 		"data channel opened\n")
+	// })
+	// dataChannel.OnClose(func() {
+	// 	fmt.Fprintf(os.Stderr,
+	// 		"data channel closed\n")
+	// })
+
 	return peerConnection,
 		videoTrack,
 		audioTrack,
+		dataChannel,
 		nil
 }
 
@@ -184,6 +243,7 @@ func newPeerConnection(peers *[]Peer) int {
 		peerConnection,
 			localVideoTrack,
 			localAudioTrack,
+			dataChannel,
 			err := startPeerConnection()
 
 		if err != nil {
@@ -197,6 +257,7 @@ func newPeerConnection(peers *[]Peer) int {
 			peerConnection:        peerConnection,
 			localVideoTrack:       localVideoTrack,
 			localAudioTrack:       localAudioTrack,
+			dataChannel:           dataChannel,
 			remoteVideoConnection: nil,
 			remoteAudioConnection: nil,
 		})
@@ -233,7 +294,7 @@ func newPeerConnection(peers *[]Peer) int {
 	}
 }
 
-func setupTrackHandler(peers *[]Peer, peerIndex int) {
+func setupTracksAndDataHandlers(peers *[]Peer, peerIndex int) {
 	for index, peer := range *peers {
 		if index == peerIndex {
 			continue
@@ -336,6 +397,13 @@ func setupTrackHandler(peers *[]Peer, peerIndex int) {
 				break
 			}
 		}
+	})
+
+	(*peers)[peerIndex].dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
+		fmt.Fprintf(os.Stderr,
+			"conn %d: data - %s\n",
+			peerIndex,
+			string(message.Data))
 	})
 }
 
@@ -537,16 +605,15 @@ func main() {
 	// hostId := "secret host room id"
 
 	var peers []Peer
-	var peerIndex int
 
 	go streamLocalTrack(&peers, false, 3998)
 	go streamLocalTrack(&peers, true, 4000)
 
 	for {
-		peerIndex = newPeerConnection(&peers)
+		var err error
+		peerIndex := newPeerConnection(&peers)
 
 		var offerSessionDescription webrtc.SessionDescription
-		var err error
 
 		for {
 			offerSessionDescription, err = peers[peerIndex].peerConnection.CreateOffer(nil)
@@ -588,7 +655,7 @@ func main() {
 			hostId,
 			peerIndex)
 
-		setupTrackHandler(&peers, peerIndex)
+		setupTracksAndDataHandlers(&peers, peerIndex)
 
 		peers[peerIndex].peerConnection.SetRemoteDescription(guestOffer)
 
