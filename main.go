@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"encoding/base64"
@@ -16,7 +18,121 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+
+	"github.com/warthog618/go-gpiocdev"
 )
+
+type Driver struct {
+	forward  bool
+	backward bool
+	left     bool
+	right    bool
+	pins     *gpiocdev.Lines
+}
+
+func (driver *Driver) initialize() error {
+
+	var err error
+	driver.pins, err = gpiocdev.RequestLines("gpiochip0", []int{5, 26, 17, 27}, gpiocdev.AsOutput(0, 0, 0, 0))
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (driver *Driver) cleanup() error {
+	driver.pins.SetValues([]int{0, 0, 0, 0})
+
+	var err error
+	err = driver.pins.Close()
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (driver *Driver) drive() {
+	orientation := 0 // negative - left, positive - right
+	if driver.left && driver.right {
+		orientation = 0
+	} else if !driver.left && !driver.right {
+		orientation = 0
+	} else if driver.left {
+		orientation = -1
+	} else {
+		orientation = 1
+	}
+
+	direction := 0 // negative - back, positive - forward
+	if driver.forward && driver.backward {
+		direction = 0
+	} else if !driver.forward && !driver.backward {
+		direction = 0
+	} else if driver.forward {
+		direction = 1
+	} else {
+		direction = -1
+	}
+
+	controlLeft := 0
+	controlRight := 0
+
+	//  2,0     1,1     0,2
+	//  1,-1    0,0     -1,1
+	//  0,-2    -1,-1   -2,0
+
+	if orientation > 0 {
+		controlLeft = 1
+		controlRight = -1
+	} else if orientation == 0 {
+		controlLeft = 0
+		controlRight = 0
+	} else {
+		controlLeft = -1
+		controlRight = 1
+	}
+
+	if direction > 0 {
+		controlLeft += 1
+		controlRight += 1
+	} else if direction == 0 {
+	} else {
+		controlLeft -= 1
+		controlRight -= 1
+	}
+
+	// controlLeft *= 5
+	// controlRight *= 5
+
+	pins := []int{0, 0, 0, 0}
+	if controlLeft > 0 {
+		pins[0] = 1
+		pins[1] = 0
+	} else if controlLeft < 0 {
+		pins[0] = 0
+		pins[1] = 1
+	} else {
+		pins[0] = 0
+		pins[1] = 0
+	}
+
+	if controlRight > 0 {
+		pins[2] = 1
+		pins[3] = 0
+	} else if controlRight < 0 {
+		pins[2] = 0
+		pins[3] = 1
+	} else {
+		pins[2] = 0
+		pins[3] = 0
+	}
+
+	driver.pins.SetValues(pins)
+}
 
 type Peer struct {
 	peerConnection        *webrtc.PeerConnection
@@ -294,7 +410,7 @@ func newPeerConnection(peers *[]Peer) int {
 	}
 }
 
-func setupTracksAndDataHandlers(peers *[]Peer, peerIndex int) {
+func setupTracksAndDataHandlers(peers *[]Peer, peerIndex int, driver *Driver) {
 	for index, peer := range *peers {
 		if index == peerIndex {
 			continue
@@ -399,7 +515,37 @@ func setupTracksAndDataHandlers(peers *[]Peer, peerIndex int) {
 		}
 	})
 
+	(*peers)[peerIndex].dataChannel.OnClose(func() {
+		driver.forward = false
+		driver.backward = false
+		driver.left = false
+		driver.right = false
+		driver.drive()
+	})
+
 	(*peers)[peerIndex].dataChannel.OnMessage(func(message webrtc.DataChannelMessage) {
+		strData := string(message.Data)
+
+		if strData == "rp" {
+			driver.right = true
+		} else if strData == "rr" {
+			driver.right = false
+		} else if strData == "lp" {
+			driver.left = true
+		} else if strData == "lr" {
+			driver.left = false
+		} else if strData == "up" {
+			driver.forward = true
+		} else if strData == "ur" {
+			driver.forward = false
+		} else if strData == "dp" {
+			driver.backward = true
+		} else if strData == "dr" {
+			driver.backward = false
+		}
+
+		driver.drive()
+
 		fmt.Fprintf(os.Stderr,
 			"conn %d: data - %s\n",
 			peerIndex,
@@ -606,6 +752,26 @@ func main() {
 
 	var peers []Peer
 
+	var driver Driver
+	err := driver.initialize()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "while driver initialize: %s\n", err)
+		return
+	}
+
+	interruptChannel := make(chan os.Signal)
+	signal.Notify(interruptChannel, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-interruptChannel
+		err := driver.cleanup()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "while driver cleanup: %s\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "successful driver cleanup.\n")
+		}
+		os.Exit(0)
+	}()
+
 	go streamLocalTrack(&peers, false, 3998)
 	go streamLocalTrack(&peers, true, 4000)
 
@@ -655,7 +821,7 @@ func main() {
 			hostId,
 			peerIndex)
 
-		setupTracksAndDataHandlers(&peers, peerIndex)
+		setupTracksAndDataHandlers(&peers, peerIndex, &driver)
 
 		peers[peerIndex].peerConnection.SetRemoteDescription(guestOffer)
 

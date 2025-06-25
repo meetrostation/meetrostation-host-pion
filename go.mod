@@ -7,6 +7,7 @@ toolchain go1.24.2
 require (
 	github.com/pion/rtp v1.8.19
 	github.com/pion/webrtc/v4 v4.1.2
+	github.com/warthog618/go-gpiocdev v0.9.1
 )
 
 require (
