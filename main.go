@@ -52,6 +52,16 @@ func (driver *Driver) cleanup() error {
 		return err
 	}
 
+	pins, err := gpiocdev.RequestLines("gpiochip0", []int{5, 26, 17, 27}, gpiocdev.AsIs)
+	if err != nil {
+		return err
+	}
+
+	err = pins.Close()
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
